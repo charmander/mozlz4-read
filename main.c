@@ -54,6 +54,10 @@ int main(int argc, char* argv[]) {
 		return EXIT_FAILURE;
 	}
 
+	if (posix_madvise(mozlz4_file, mozlz4_size, POSIX_MADV_SEQUENTIAL) != 0) {
+		perror("Warning: madvise failed");
+	}
+
 	if (mozlz4_size < MOZLZ4_LZ4_OFFSET) {
 		fprintf(stderr, "Input of %zu bytes is too small to contain size header\n", mozlz4_size);
 		return EXIT_FAILURE;
