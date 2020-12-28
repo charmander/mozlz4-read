@@ -31,7 +31,8 @@ static _Noreturn void syscall_exit(int const code) {
 	__builtin_unreachable();
 }
 
-static _Noreturn void void_main(__attribute__ ((nonnull)) char const* const filename) {
+__attribute__ ((nonnull))
+static _Noreturn void void_main(char const* const filename) {
 	int fd = open(filename, O_RDONLY);
 
 	if (fd == -1) {
