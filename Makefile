@@ -4,6 +4,7 @@ CFLAGS = -std=c17 -march=native -mtune=native -O2 -Wl,-s,-z,now,-z,relro -pipe -
 CFLAGS += -Wall -Wextra -Weverything -Wno-disabled-macro-expansion -pedantic
 
 # program
+CFLAGS += -D_DEFAULT_SOURCE
 CFLAGS += -D_POSIX_C_SOURCE=200112L
 
 # liblz4

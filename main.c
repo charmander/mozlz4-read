@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <limits.h>
@@ -6,8 +7,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <linux/prctl.h>
+#include <linux/seccomp.h>
 #include <sys/mman.h>
+#include <sys/prctl.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <lz4.h>
 
 static uint8_t MOZLZ4_HEADER[8] = "mozLz40";
@@ -21,17 +26,17 @@ static void show_usage(void) {
 	fputs("Usage: mozlz4-read <file>\n", stderr);
 }
 
-int main(int argc, char* argv[]) {
-	if (argc != 2) {
-		show_usage();
-		return EXIT_FAILURE;
-	}
+static _Noreturn void syscall_exit(int const code) {
+	syscall(SYS_exit, code);
+	__builtin_unreachable();
+}
 
-	int fd = open(argv[1], O_RDONLY);
+static _Noreturn void void_main(__attribute__ ((nonnull)) char const* const filename) {
+	int fd = open(filename, O_RDONLY);
 
 	if (fd == -1) {
 		perror("Failed to open file");
-		return EXIT_FAILURE;
+		syscall_exit(EXIT_FAILURE);
 	}
 
 	size_t mozlz4_size;
@@ -41,7 +46,7 @@ int main(int argc, char* argv[]) {
 
 		if (fstat(fd, &stat) != 0) {
 			perror("Failed to stat file");
-			return EXIT_FAILURE;
+			syscall_exit(EXIT_FAILURE);
 		}
 
 		mozlz4_size = (size_t)stat.st_size;
@@ -51,7 +56,7 @@ int main(int argc, char* argv[]) {
 
 	if (mozlz4_file == MAP_FAILED) {
 		perror("Failed to map file");
-		return EXIT_FAILURE;
+		syscall_exit(EXIT_FAILURE);
 	}
 
 	if (posix_madvise(mozlz4_file, mozlz4_size, POSIX_MADV_SEQUENTIAL) != 0) {
@@ -60,12 +65,12 @@ int main(int argc, char* argv[]) {
 
 	if (mozlz4_size < MOZLZ4_LZ4_OFFSET) {
 		fprintf(stderr, "Input of %zu bytes is too small to contain size header\n", mozlz4_size);
-		return EXIT_FAILURE;
+		syscall_exit(EXIT_FAILURE);
 	}
 
 	if (memcmp(mozlz4_file, MOZLZ4_HEADER, sizeof MOZLZ4_HEADER) != 0) {
 		fputs("Missing or invalid mozLz4 header\n", stderr);
-		return EXIT_FAILURE;
+		syscall_exit(EXIT_FAILURE);
 	}
 
 	int header_size;
@@ -79,7 +84,7 @@ int main(int argc, char* argv[]) {
 
 		if (header_size_u > (uint_least32_t)INT_MAX) {
 			fprintf(stderr, "Declared decompressed size of %" PRIuLEAST32 " bytes is too large\n", header_size_u);
-			return EXIT_FAILURE;
+			syscall_exit(EXIT_FAILURE);
 		}
 
 		header_size = (int)header_size_u;
@@ -89,13 +94,15 @@ int main(int argc, char* argv[]) {
 
 	if (decompressed == NULL) {
 		fprintf(stderr, "Failed to allocate buffer of size %d for decompressed data\n", header_size);
-		return EXIT_FAILURE;
+		syscall_exit(EXIT_FAILURE);
 	}
 
 	if (mozlz4_size - MOZLZ4_LZ4_OFFSET > INT_MAX) {
 		fprintf(stderr, "Input of %zu bytes is too large\n", mozlz4_size);
-		return EXIT_FAILURE;
+		syscall_exit(EXIT_FAILURE);
 	}
+
+	prctl(PR_SET_SECCOMP, SECCOMP_MODE_STRICT);
 
 	int const decompressed_count = LZ4_decompress_safe(
 		(char const*)&mozlz4_file[MOZLZ4_LZ4_OFFSET],
@@ -104,30 +111,39 @@ int main(int argc, char* argv[]) {
 		header_size
 	);
 
-	if (munmap(mozlz4_file, mozlz4_size) != 0) {
-		perror("Failed to unmap file");
-		return EXIT_FAILURE;
-	}
-
-	if (close(fd) != 0) {
-		perror("Failed to close file");
-		return EXIT_FAILURE;
-	}
-
 	if (decompressed_count < 0) {
 		fprintf(stderr, "Decompression failed: error %d\n", -decompressed_count);
-		return EXIT_FAILURE;
+		syscall_exit(EXIT_FAILURE);
 	}
 
 	if (decompressed_count != header_size) {
 		fprintf(stderr, "Warning: header declared capacity %d bytes, but decompression produced %d bytes\n", header_size, decompressed_count);
+		syscall_exit(EXIT_FAILURE);
+	}
+
+	int offset = 0;
+
+	while (offset != decompressed_count) {
+		ssize_t const w = write(STDOUT_FILENO, &decompressed[offset], (size_t)(decompressed_count - offset));
+
+		if (w == -1) {
+			if (errno != EINTR) {
+				perror("Failed to write output");
+				syscall_exit(EXIT_FAILURE);
+			}
+		} else {
+			offset += (int)w;
+		}
+	}
+
+	syscall_exit(EXIT_SUCCESS);
+}
+
+int main(int argc, char* argv[]) {
+	if (argc != 2) {
+		show_usage();
 		return EXIT_FAILURE;
 	}
 
-	if (fwrite(decompressed, sizeof(uint8_t), (size_t)decompressed_count, stdout) != (size_t)decompressed_count) {
-		perror("Failed to write output");
-		return EXIT_FAILURE;
-	}
-
-	return EXIT_SUCCESS;
+	void_main(argv[1]);
 }
