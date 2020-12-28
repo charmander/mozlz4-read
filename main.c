@@ -128,13 +128,11 @@ int main(void) {
 		goto free_fail;
 	}
 
-	int const decompressed_count = LZ4_decompress_safe_usingDict(
+	int const decompressed_count = LZ4_decompress_safe(
 		(char const*)&buf.contents[4],
 		(char*)decompressed,
 		(int)(buf.length - 4),
-		header_size,
-		"",
-		0
+		header_size
 	);
 
 	buf_free(buf);
